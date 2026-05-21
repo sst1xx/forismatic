@@ -29,6 +29,13 @@ HEADERS = {
     "User-Agent": "forismatic-bot/1.0 (https://github.com/forismatic; educational project)"
 }
 
+# Ограничиваем httpx: не более 5 одновременных соединений,
+# таймаут 20с на соединение и чтение.
+# Защита от скачивания огромных страниц в RAM.
+_HTTP_LIMITS = httpx.Limits(max_connections=5, max_keepalive_connections=2)
+_HTTP_TIMEOUT = httpx.Timeout(20.0)
+_MAX_RESPONSE_BYTES = 5_000_000  # 5 MB — выше этого скипаем страницу
+
 # ---------------------------------------------------------------------------
 # Утилиты
 # ---------------------------------------------------------------------------
@@ -162,7 +169,7 @@ async def fetch_wikiquote_author(client: httpx.AsyncClient, author: str) -> list
 async def fetch_wikiquote(target: int = 3000) -> list[tuple[str, str | None]]:
     log.info("=== WikiQuote RU ===")
     all_quotes: list[tuple[str, str | None]] = []
-    async with httpx.AsyncClient(headers=HEADERS) as client:
+    async with httpx.AsyncClient(headers=HEADERS, limits=_HTTP_LIMITS, timeout=_HTTP_TIMEOUT) as client:
         for i, author in enumerate(WIKIAUTHORS):
             quotes = await fetch_wikiquote_author(client, author)
             all_quotes.extend(quotes)
@@ -270,7 +277,7 @@ async def fetch_wikipedia_did_you_know(target: int = 2000) -> list[tuple[str, No
     log.info("=== Wikipedia RU 'Знаете ли вы' ===")
     all_facts: list[str] = []
 
-    async with httpx.AsyncClient(headers=HEADERS) as client:
+    async with httpx.AsyncClient(headers=HEADERS, limits=_HTTP_LIMITS, timeout=_HTTP_TIMEOUT) as client:
         # Текущий шаблон
         current_facts = await fetch_did_you_know_current(client)
         all_facts.extend(current_facts)
@@ -330,10 +337,13 @@ APHORISM_CATEGORIES = [
 async def fetch_aphorism_page(client: httpx.AsyncClient, url: str) -> list[tuple[str, str | None]]:
     results = []
     try:
-        resp = await client.get(url, timeout=20, follow_redirects=True)
+        resp = await client.get(url, timeout=_HTTP_TIMEOUT, follow_redirects=True)
         if resp.status_code != 200:
             return results
-        soup = BeautifulSoup(resp.text, "lxml")
+        if len(resp.content) > _MAX_RESPONSE_BYTES:
+            log.warning(f"aphorism.ru: слишком большой ответ {len(resp.content)} байт, пропускаем {url}")
+            return results
+        soup = BeautifulSoup(resp.text, "html.parser")
 
         # Структура aphorism.ru: цитата в div.aphorism-text, автор в div.aphorism-author
         for block in soup.select("div.aphorism-text, .quote-text, .aph-text, [class*='aphorism']"):
@@ -360,7 +370,7 @@ async def fetch_aphorism_page(client: httpx.AsyncClient, url: str) -> list[tuple
 async def fetch_aphorism_ru(max_pages: int = 50) -> list[tuple[str, str | None]]:
     log.info("=== aphorism.ru ===")
     all_quotes: list[tuple[str, str | None]] = []
-    async with httpx.AsyncClient(headers=HEADERS) as client:
+    async with httpx.AsyncClient(headers=HEADERS, limits=_HTTP_LIMITS, timeout=_HTTP_TIMEOUT) as client:
         for cat in APHORISM_CATEGORIES:
             for page in range(1, max_pages + 1):
                 url = f"{APHORISM_RU_BASE}{cat}?page={page}" if page > 1 else f"{APHORISM_RU_BASE}{cat}"
@@ -395,10 +405,13 @@ CITATY_SECTIONS = [
 async def fetch_citaty_page(client: httpx.AsyncClient, url: str) -> list[tuple[str, str | None]]:
     results = []
     try:
-        resp = await client.get(url, timeout=20, follow_redirects=True)
+        resp = await client.get(url, timeout=_HTTP_TIMEOUT, follow_redirects=True)
         if resp.status_code != 200:
             return results
-        soup = BeautifulSoup(resp.text, "lxml")
+        if len(resp.content) > _MAX_RESPONSE_BYTES:
+            log.warning(f"citaty.info: слишком большой ответ {len(resp.content)} байт, пропускаем {url}")
+            return results
+        soup = BeautifulSoup(resp.text, "html.parser")
 
         for block in soup.select(".quote, .quote-body, [class*='quote'], article"):
             text_el = block.select_one("p, .text, [class*='text'], [class*='body']")
@@ -423,7 +436,7 @@ async def fetch_citaty_page(client: httpx.AsyncClient, url: str) -> list[tuple[s
 async def fetch_citaty_info(max_pages: int = 30) -> list[tuple[str, str | None]]:
     log.info("=== citaty.info ===")
     all_quotes: list[tuple[str, str | None]] = []
-    async with httpx.AsyncClient(headers=HEADERS) as client:
+    async with httpx.AsyncClient(headers=HEADERS, limits=_HTTP_LIMITS, timeout=_HTTP_TIMEOUT) as client:
         for section in CITATY_SECTIONS:
             for page in range(1, max_pages + 1):
                 url = f"{CITATY_BASE}{section}?page={page}" if page > 1 else f"{CITATY_BASE}{section}"
@@ -568,28 +581,35 @@ BUILTIN_QUOTES: list[tuple[str, str | None]] = [
 # ---------------------------------------------------------------------------
 
 TARGET = 20_000
+BATCH = 3_000
 
 
 async def run_fetch(target: int = TARGET):
     await init_db()
 
+    # Считаем batch_target: за один запуск не более BATCH новых записей,
+    # но не превышаем TARGET.
+    current = await count_quotes()
+    batch_target = min(current + BATCH, TARGET)
+    log.info(f"Старт fetcher. В базе: {current}, цель этого запуска: {batch_target} (макс: {TARGET}).")
+
     # Шаг 1: всегда подгружаем свежий шаблон ЗЛВ (1 запрос, ~11 фактов).
     # INSERT OR IGNORE — дубликаты молча отбрасываются.
     # Это гарантирует пополнение свежими фактами при каждом рестарте.
     log.info("Подгружаем свежий шаблон 'Знаете ли вы'...")
-    async with httpx.AsyncClient(headers=HEADERS) as client:
+    async with httpx.AsyncClient(headers=HEADERS, limits=_HTTP_LIMITS, timeout=_HTTP_TIMEOUT) as client:
         fresh = await fetch_did_you_know_current(client)
     if fresh:
         await insert_quotes([(t, None) for t in fresh])
         log.info(f"Свежий ЗЛВ: получено {len(fresh)} фактов (новые добавлены, дубли пропущены)")
 
-    # Шаг 2: если цель уже достигнута — выходим
+    # Шаг 2: если batch_target уже достигнут — выходим
     current = await count_quotes()
-    if current >= target:
-        log.info(f"База содержит {current} записей, цель {target} достигнута.")
+    if current >= batch_target:
+        log.info(f"База содержит {current} записей, цель {batch_target} достигнута.")
         return
 
-    log.info(f"Досгружаем до {target}. Сейчас в базе: {current}")
+    log.info(f"Досгружаем до {batch_target}. Сейчас в базе: {current}")
 
     # Встроенная база (идемпотентно — дубликаты игнорируются)
     await insert_quotes(BUILTIN_QUOTES)
@@ -597,23 +617,23 @@ async def run_fetch(target: int = TARGET):
     log.info(f"После встроенной базы: {current} записей")
 
     # WikiQuote
-    if current < target:
-        wiki_quotes = await fetch_wikiquote(target=target - current + 500)
+    if current < batch_target:
+        wiki_quotes = await fetch_wikiquote(target=batch_target - current + 500)
         if wiki_quotes:
             await insert_quotes(wiki_quotes)
             current = await count_quotes()
             log.info(f"После WikiQuote: {current} записей")
 
     # Wikipedia "Знаете ли вы" — архив
-    if current < target:
-        zlv_facts = await fetch_wikipedia_did_you_know(target=min(5000, target - current + 500))
+    if current < batch_target:
+        zlv_facts = await fetch_wikipedia_did_you_know(target=min(5000, batch_target - current + 500))
         if zlv_facts:
             await insert_quotes(zlv_facts)
             current = await count_quotes()
             log.info(f"После Wikipedia ЗЛВ: {current} записей")
 
     # aphorism.ru
-    if current < target:
+    if current < batch_target:
         aph_quotes = await fetch_aphorism_ru()
         if aph_quotes:
             await insert_quotes(aph_quotes)
@@ -621,7 +641,7 @@ async def run_fetch(target: int = TARGET):
             log.info(f"После aphorism.ru: {current} записей")
 
     # citaty.info
-    if current < target:
+    if current < batch_target:
         cit_quotes = await fetch_citaty_info()
         if cit_quotes:
             await insert_quotes(cit_quotes)

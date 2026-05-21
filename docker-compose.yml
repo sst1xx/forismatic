@@ -1,6 +1,6 @@
 services:
   app:
-    build: .
+    image: vitalplay/forismatic:latest
     ports:
       - "8000:8000"
     volumes:
@@ -8,3 +8,5 @@ services:
     environment:
       DB_PATH: /data/quotes.db
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: "1.0"

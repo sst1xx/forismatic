@@ -6,17 +6,37 @@ Minimal FastAPI service returning random Russian quotes/facts as `text/plain` �
 
 ## Stack
 
-- Python 3.12, FastAPI, aiosqlite, httpx, BeautifulSoup4/lxml
+- Python 3.12, FastAPI, aiosqlite, httpx, BeautifulSoup4 (`html.parser` — no lxml)
 - SQLite at `/data/quotes.db` (Docker volume `./data`)
 - `DB_PATH` env var overrides the path (useful for tests: `DB_PATH=/tmp/test.db`)
 
 ## Run
 
+### Сборка и публикация на Docker Hub (локально, на машине разработчика)
+
 ```bash
-docker compose up -d          # start (fetcher runs in background on every start)
-docker compose logs -f        # watch fetcher progress
-docker compose restart        # re-triggers fetcher (adds up to 3000 new records)
+VERSION=$(date +%Y.%m.%d)
+docker build -t vitalplay/forismatic:$VERSION -t vitalplay/forismatic:latest .
+docker push vitalplay/forismatic:$VERSION
+docker push vitalplay/forismatic:latest
 ```
+
+Теги: `vitalplay/forismatic:YYYY.MM.DD` + `vitalplay/forismatic:latest`.
+Пользователь Docker Hub: **vitalplay** (уже залогинен).
+
+### Деплой на сервере (только docker-compose.yml — без кода)
+
+```bash
+docker compose pull            # скачать свежий образ с Docker Hub
+docker compose up -d           # запустить / перезапустить
+docker compose logs -f         # наблюдать за fetcher
+docker compose restart         # re-triggers fetcher (adds up to 3000 new records)
+```
+
+CRITICAL: на сервере нет `build:` секции — образ берётся с Docker Hub.
+После любых правок в `app/` или `requirements.txt`:
+1. Собери и запуши новый образ (команды выше)
+2. На сервере: `docker compose pull && docker compose up -d`
 
 Manual fetcher run (e.g. to force full reload):
 ```bash
