@@ -567,21 +567,34 @@ BUILTIN_QUOTES: list[tuple[str, str | None]] = [
 # Главная точка входа
 # ---------------------------------------------------------------------------
 
-async def run_fetch(target: int = 5000):
+TARGET = 20_000
+
+
+async def run_fetch(target: int = TARGET):
     await init_db()
 
+    # Шаг 1: всегда подгружаем свежий шаблон ЗЛВ (1 запрос, ~11 фактов).
+    # INSERT OR IGNORE — дубликаты молча отбрасываются.
+    # Это гарантирует пополнение свежими фактами при каждом рестарте.
+    log.info("Подгружаем свежий шаблон 'Знаете ли вы'...")
+    async with httpx.AsyncClient(headers=HEADERS) as client:
+        fresh = await fetch_did_you_know_current(client)
+    if fresh:
+        await insert_quotes([(t, None) for t in fresh])
+        log.info(f"Свежий ЗЛВ: получено {len(fresh)} фактов (новые добавлены, дубли пропущены)")
+
+    # Шаг 2: если цель уже достигнута — выходим
     current = await count_quotes()
     if current >= target:
-        log.info(f"База уже содержит {current} цитат, пропускаем загрузку.")
+        log.info(f"База содержит {current} записей, цель {target} достигнута.")
         return
 
-    log.info(f"Старт загрузки цитат. Цель: {target}. Сейчас в базе: {current}")
+    log.info(f"Досгружаем до {target}. Сейчас в базе: {current}")
 
-    # Сначала встроенные (они всегда качественные)
-    log.info("Загружаем встроенную базу...")
+    # Встроенная база (идемпотентно — дубликаты игнорируются)
     await insert_quotes(BUILTIN_QUOTES)
     current = await count_quotes()
-    log.info(f"После встроенной базы: {current} цитат")
+    log.info(f"После встроенной базы: {current} записей")
 
     # WikiQuote
     if current < target:
@@ -589,11 +602,11 @@ async def run_fetch(target: int = 5000):
         if wiki_quotes:
             await insert_quotes(wiki_quotes)
             current = await count_quotes()
-            log.info(f"После WikiQuote: {current} цитат")
+            log.info(f"После WikiQuote: {current} записей")
 
-    # Wikipedia "Знаете ли вы"
+    # Wikipedia "Знаете ли вы" — архив
     if current < target:
-        zlv_facts = await fetch_wikipedia_did_you_know(target=2000)
+        zlv_facts = await fetch_wikipedia_did_you_know(target=min(5000, target - current + 500))
         if zlv_facts:
             await insert_quotes(zlv_facts)
             current = await count_quotes()
@@ -605,7 +618,7 @@ async def run_fetch(target: int = 5000):
         if aph_quotes:
             await insert_quotes(aph_quotes)
             current = await count_quotes()
-            log.info(f"После aphorism.ru: {current} цитат")
+            log.info(f"После aphorism.ru: {current} записей")
 
     # citaty.info
     if current < target:
@@ -613,10 +626,10 @@ async def run_fetch(target: int = 5000):
         if cit_quotes:
             await insert_quotes(cit_quotes)
             current = await count_quotes()
-            log.info(f"После citaty.info: {current} цитат")
+            log.info(f"После citaty.info: {current} записей")
 
     final = await count_quotes()
-    log.info(f"Загрузка завершена. Итого в базе: {final} цитат.")
+    log.info(f"Загрузка завершена. Итого в базе: {final} записей.")
 
 
 if __name__ == "__main__":
