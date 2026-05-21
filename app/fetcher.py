@@ -60,13 +60,23 @@ def ensure_punct(text: str) -> str:
 
 def is_valid(text: str) -> bool:
     """Фильтрация мусора: минимальная длина, наличие кириллицы."""
-    if len(text) < 15 or len(text) > 500:
+    if len(text) < 20 or len(text) > 500:
         return False
     # Должна содержать кириллицу
     if not re.search(r"[а-яёА-ЯЁ]", text):
         return False
     # Не должна быть просто шаблоном [[Category:...]] или подобным
     if text.startswith("[[") or text.startswith("{{"):
+        return False
+    # Навигационные строки WikiQuote (категории, технические пометки)
+    nav_prefixes = (":", "категория:", "см.", "см. также", "wikiquote")
+    if text.lower().startswith(nav_prefixes):
+        return False
+    # Должна содержать хотя бы одно слово длиннее 3 символов из кириллицы
+    if not re.search(r"[а-яёА-ЯЁ]{4,}", text):
+        return False
+    # Минимум 4 слова (заголовки разделов типа "Критика и публицистика" не пройдут)
+    if len(text.split()) < 4:
         return False
     return True
 
@@ -128,11 +138,17 @@ async def fetch_wikiquote_author(client: httpx.AsyncClient, author: str) -> list
             if not m:
                 continue
             raw = m.group(1)
+            # Пропустить строки с внешними ссылками (раздел "Ссылки")
+            if re.search(r"\[https?://", raw):
+                continue
             # Убрать вики-разметку: [[...]], {{...}}, ''...'', <ref>...</ref>
             raw = re.sub(r"<ref[^>]*>.*?</ref>", "", raw, flags=re.DOTALL)
             raw = re.sub(r"<[^>]+>", "", raw)
             raw = re.sub(r"\{\{[^}]*\}\}", "", raw)
             raw = re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]*)\]\]", r"\1", raw)
+            # Внешние ссылки без протокола или оставшиеся [url текст] → текст
+            raw = re.sub(r"\[https?://\S+\s+([^\]]+)\]", r"\1", raw)
+            raw = re.sub(r"\[https?://\S+\]", "", raw)
             raw = re.sub(r"'+", "", raw)
             raw = clean_text(raw)
             raw = ensure_punct(raw)
