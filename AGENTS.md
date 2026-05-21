@@ -6,7 +6,7 @@ Minimal FastAPI service returning random Russian quotes/facts as `text/plain` �
 
 ## Stack
 
-- Python 3.12, FastAPI, aiosqlite, httpx, BeautifulSoup4 (`html.parser` — no lxml)
+- Python 3.12, FastAPI, **stdlib sqlite3** (no aiosqlite), httpx, BeautifulSoup4 (`html.parser` — no lxml)
 - SQLite at `/data/quotes.db` (Docker volume `./data`)
 - `DB_PATH` env var overrides the path (useful for tests: `DB_PATH=/tmp/test.db`)
 
@@ -64,7 +64,7 @@ Quote format: `Текст цитаты. Автор` — no em-dashes, author app
 
 `TARGET = 20_000` in `app/fetcher.py`.
 
-Each restart loads at most **3 000 new records** (`batch_target = min(count + 3000, TARGET)`), defined in `app/main.py`. The DB grows across restarts until it hits TARGET.
+Each restart loads at most **3 000 new records** (`batch_target = min(count + 3000, TARGET)`), defined in `app/fetcher.py`. The DB grows across restarts until it hits TARGET.
 
 Once TARGET is reached, every restart only fetches the current `Шаблон:Знаете_ли_вы` template (~11 facts, 1 HTTP request) to keep content fresh. `INSERT OR IGNORE` silently drops duplicates — dedup is by exact `text` value (UNIQUE index).
 
@@ -108,10 +108,32 @@ quotes(id INTEGER PK, text TEXT NOT NULL, author TEXT)
 
 No migrations. Schema created via `CREATE TABLE IF NOT EXISTS` on every startup.
 
+## Known gotchas
+
+### uvloop crash on low-resource servers (`RuntimeError: can't start new thread`)
+
+`fastapi==0.111.0` pulls `uvicorn[standard]` which includes `uvloop`. On Linux,
+uvicorn auto-selects uvloop, which creates threads on startup and shutdown.
+On servers with a strict `ulimit -u` (process/thread limit) this causes a crash.
+
+**Fix already applied:** `CMD` in Dockerfile uses `--loop asyncio` to force stdlib
+event loop regardless of whether uvloop is installed:
+```dockerfile
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "asyncio"]
+```
+
+Mac is unaffected because uvloop has no wheel for `darwin/arm64`.
+
+### database.py uses no threads
+
+`aiosqlite` was replaced with plain `sqlite3` called directly in the async functions
+(no `run_in_executor`). SQLite ops take microseconds at this workload — no event loop
+blocking in practice. Do not reintroduce aiosqlite or run_in_executor.
+
 ## Testing without Docker
 
 ```bash
-DB_PATH=/tmp/test.db uvicorn app.main:app --reload   # requires venv with requirements.txt
+DB_PATH=/tmp/test.db uvicorn app.main:app --reload --loop asyncio
 ```
 
 Quick syntax check:

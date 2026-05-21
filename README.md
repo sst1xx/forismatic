@@ -58,3 +58,9 @@ docker compose pull && docker compose up -d
 vitalplay/forismatic:latest
 vitalplay/forismatic:YYYY.MM.DD
 ```
+
+Образ собран для `linux/amd64` и `linux/arm64`.
+
+## Совместимость
+
+Работает на любом Linux-сервере включая машины с ограниченным количеством тредов (`ulimit -u`). Для этого uvicorn запускается с `--loop asyncio` (без uvloop).
