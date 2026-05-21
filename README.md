@@ -63,4 +63,7 @@ vitalplay/forismatic:YYYY.MM.DD
 
 ## Совместимость
 
-Работает на любом Linux-сервере включая машины с ограниченным количеством тредов (`ulimit -u`). Для этого uvicorn запускается с `--loop asyncio` (без uvloop).
+Работает на любом Linux-сервере включая машины с ограниченным количеством тредов (`ulimit -u`):
+- uvicorn запускается с `--loop asyncio` (без uvloop)
+- fetcher использует `urllib.request` вместо httpx — никаких тредов
+- SQLite вызывается напрямую без aiosqlite

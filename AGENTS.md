@@ -6,7 +6,7 @@ Minimal FastAPI service returning random Russian quotes/facts as `text/plain` �
 
 ## Stack
 
-- Python 3.12, FastAPI, **stdlib sqlite3** (no aiosqlite), httpx, BeautifulSoup4 (`html.parser` — no lxml)
+- Python 3.12, FastAPI, **stdlib sqlite3** (no aiosqlite), **stdlib urllib.request** (no httpx), BeautifulSoup4 (`html.parser` — no lxml)
 - SQLite at `/data/quotes.db` (Docker volume `./data`)
 - `DB_PATH` env var overrides the path (useful for tests: `DB_PATH=/tmp/test.db`)
 
@@ -110,25 +110,41 @@ No migrations. Schema created via `CREATE TABLE IF NOT EXISTS` on every startup.
 
 ## Known gotchas
 
-### uvloop crash on low-resource servers (`RuntimeError: can't start new thread`)
+### `RuntimeError: can't start new thread` on low-resource servers
 
-`fastapi==0.111.0` pulls `uvicorn[standard]` which includes `uvloop`. On Linux,
+Root cause: server has a very strict `ulimit -u` (process/thread limit). Any library
+that creates threads internally will crash — even one thread is too many.
+
+Three layers of fixes were applied:
+
+**1. uvloop** — `fastapi==0.111.0` pulls `uvicorn[standard]` → `uvloop`. On Linux,
 uvicorn auto-selects uvloop, which creates threads on startup and shutdown.
-On servers with a strict `ulimit -u` (process/thread limit) this causes a crash.
-
-**Fix already applied:** `CMD` in Dockerfile uses `--loop asyncio` to force stdlib
-event loop regardless of whether uvloop is installed:
+Fix: `--loop asyncio` in Dockerfile CMD forces stdlib event loop:
 ```dockerfile
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "asyncio"]
 ```
 
-Mac is unaffected because uvloop has no wheel for `darwin/arm64`.
+**2. aiosqlite** — creates a dedicated thread per connection.
+Fix: replaced with plain `sqlite3` called directly in async functions (no threads, no `run_in_executor`).
+
+**3. httpx** — `AsyncClient` creates an internal thread pool for connection pooling and DNS.
+Fix: replaced with stdlib `urllib.request` — synchronous, zero threads. Works fine
+because fetcher runs as a separate OS process (not inside uvicorn's event loop).
+
+Mac is unaffected because uvloop has no wheel for `darwin/arm64`, and httpx on Mac
+does not hit thread limits in development.
+
+### fetcher.py is fully synchronous
+
+fetcher runs as a separate process (`subprocess.Popen` from `main.py` lifespan).
+It uses `urllib.request`, plain `sqlite3`, and `time.sleep` — no asyncio, no threads.
+Do NOT reintroduce httpx, aiosqlite, or asyncio into fetcher.py.
 
 ### database.py uses no threads
 
-`aiosqlite` was replaced with plain `sqlite3` called directly in the async functions
-(no `run_in_executor`). SQLite ops take microseconds at this workload — no event loop
-blocking in practice. Do not reintroduce aiosqlite or run_in_executor.
+`sqlite3` is called directly in async functions without `run_in_executor`.
+SQLite ops take microseconds at this workload — no event loop blocking in practice.
+Do not reintroduce aiosqlite or run_in_executor.
 
 ## Testing without Docker
 
