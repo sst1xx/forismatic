@@ -15,14 +15,22 @@ Minimal FastAPI service returning random Russian quotes/facts as `text/plain` �
 ### Сборка и публикация на Docker Hub (локально, на машине разработчика)
 
 ```bash
+# Один раз: создать multi-platform builder
+docker buildx create --name multiarch --driver docker-container --use --bootstrap
+
+# Сборка и пуш сразу для amd64 + arm64 (--push пишет напрямую в Docker Hub)
 VERSION=$(date +%Y.%m.%d)
-docker build -t vitalplay/forismatic:$VERSION -t vitalplay/forismatic:latest .
-docker push vitalplay/forismatic:$VERSION
-docker push vitalplay/forismatic:latest
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t vitalplay/forismatic:$VERSION \
+  -t vitalplay/forismatic:latest \
+  --push \
+  .
 ```
 
 Теги: `vitalplay/forismatic:YYYY.MM.DD` + `vitalplay/forismatic:latest`.
 Пользователь Docker Hub: **vitalplay** (уже залогинен).
+Образ локально после `buildx --push` не появляется — это нормально, он сразу в registry.
 
 ### Деплой на сервере (только docker-compose.yml — без кода)
 
