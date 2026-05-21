@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import logging
 import subprocess
@@ -12,29 +13,33 @@ from .fetcher import TARGET
 log = logging.getLogger(__name__)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await init_db()
-    count = await count_quotes()
-    log.info(f"База содержит {count} записей (цель: {TARGET}).")
-    # Запускаем fetcher как отдельный OS-процесс в новой сессии.
-    # - start_new_session=True: процесс выходит из группы uvicorn,
-    #   SIGTERM от Docker до него не доходит — fetcher доживает до конца.
-    # - close_fds=True: не наследует файловые дескрипторы uvicorn.
-    # - Popen не блокирует и не оставляет зомби: мы не вызываем wait(),
-    #   процесс будет усыновлён init (PID 1 внутри контейнера).
+async def _start_fetcher():
+    """Запускаем fetcher с небольшой задержкой после старта сервера."""
+    await asyncio.sleep(2)
+    log.info("Запускаем fetcher как фоновый процесс...")
     subprocess.Popen(
         [sys.executable, "-m", "app.fetcher"],
         start_new_session=True,
         close_fds=True,
     )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    count = await count_quotes()
+    log.info(f"База содержит {count} записей (цель: {TARGET}).")
+    # Откладываем запуск fetcher на 2 секунды после старта сервера.
+    # asyncio.create_task не создаёт тредов — Popen вызовется уже после
+    # того как uvicorn полностью запустился и lifespan завершён.
+    asyncio.create_task(_start_fetcher())
     yield
 
 
 app = FastAPI(
     title="Forismatic",
-    docs_url=None,   # Отключаем swagger UI
-    redoc_url=None,  # Отключаем redoc
+    docs_url=None,
+    redoc_url=None,
     openapi_url=None,
     lifespan=lifespan,
 )
