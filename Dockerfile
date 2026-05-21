@@ -17,4 +17,6 @@ RUN mkdir -p /data
 EXPOSE 8000
 
 # uvicorn является PID 1 — корректно получает SIGTERM от Docker
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --loop asyncio: явно отключаем uvloop (тянется транзитивно через fastapi->uvicorn[standard])
+# uvloop требует тредов при старте/завершении — crash на серверах с низким ulimit -u
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "asyncio"]
