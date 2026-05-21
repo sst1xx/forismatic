@@ -1,0 +1,101 @@
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+.eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+
+# mypy / pyright
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+.pyre/
+
+# =============================================================================
+# macOS / macBook ecosystem
+# =============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.AppleDouble
+.LSOverride
+Icon
+
+# Thumbnails
+ehthumbs.db
+Thumbs.db
+
+# macOS Finder
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Xcode
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+
+# =============================================================================
+# Project-specific
+# =============================================================================
+# SQLite database (хранится в Docker volume ./data/)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Секреты и конфиги с ключами
+.env.local
+.env.production
+secrets.json
+
+# Логи
+*.log
+logs/
+
+# =============================================================================
+# Editors / IDEs
+# =============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
