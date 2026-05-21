@@ -66,16 +66,14 @@ Quote format: `Текст цитаты. Автор` — no em-dashes, author app
 
 Each restart loads at most **3 000 new records** (`batch_target = min(count + 3000, TARGET)`), defined in `app/fetcher.py`. The DB grows across restarts until it hits TARGET.
 
-Once TARGET is reached, every restart only fetches the current `Шаблон:Знаете_ли_вы` template (~11 facts, 1 HTTP request) to keep content fresh. `INSERT OR IGNORE` silently drops duplicates — dedup is by exact `text` value (UNIQUE index).
+Once TARGET is reached, the DB is considered complete — new restarts just load BUILTIN_QUOTES (idempotent, no HTTP). `INSERT OR IGNORE` silently drops duplicates — dedup is by exact `text` value (UNIQUE index).
 
 ## Data sources (order matters in `run_fetch`)
 
-1. **Current ЗЛВ template** — always fetched first on every start (`fetch_did_you_know_current`)
-2. **BUILTIN_QUOTES** — ~100 hardcoded classics, idempotent
-3. **WikiQuote RU** (`ru.wikiquote.org/w/api.php`) — quotes by author pages from `WIKIAUTHORS` list
-4. **Wikipedia ЗЛВ archive** (`ru.wikipedia.org/w/api.php`, `Проект:Знаете_ли_вы/Архив_рубрики/YYYY-MM`) — curated facts, archive from 2008
-5. **aphorism.ru** — scraping, may be slow or blocked
-6. **citaty.info** — scraping, may be slow or blocked
+1. **BUILTIN_QUOTES** — ~100 hardcoded classics, idempotent
+2. **WikiQuote RU** (`ru.wikiquote.org/w/api.php`) — quotes by author pages from `WIKIAUTHORS` list
+3. **aphorism.ru** — scraping, may be slow or blocked
+4. **citaty.info** — scraping, may be slow or blocked
 
 ## Parsing quirks
 

@@ -43,15 +43,9 @@ async def count_quotes() -> int:
 
 async def get_random_quote() -> Optional[str]:
     conn = _connect()
-    row = conn.execute("""
-        SELECT text, author FROM quotes
-        WHERE id >= (ABS(RANDOM()) % (SELECT MAX(id) FROM quotes) + 1)
-        ORDER BY id LIMIT 1
-    """).fetchone()
-    if row is None:
-        row = conn.execute(
-            "SELECT text, author FROM quotes ORDER BY id LIMIT 1"
-        ).fetchone()
+    row = conn.execute(
+        "SELECT text, author FROM quotes ORDER BY RANDOM() LIMIT 1"
+    ).fetchone()
     conn.close()
     if row is None:
         return None

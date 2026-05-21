@@ -1,5 +1,5 @@
 """
-Fetcher: загружает 5000+ русскоязычных цитат, афоризмов и интересных фактов.
+Fetcher: загружает русскоязычные цитаты и афоризмы.
 
 Запускается как отдельный OS-процесс (python -m app.fetcher).
 Полностью синхронный — без asyncio, без httpx, без тредов.
@@ -10,7 +10,6 @@ import re
 import json
 import time
 import logging
-import datetime
 import sqlite3
 import urllib.request
 import urllib.parse
@@ -221,101 +220,14 @@ def fetch_wikiquote(target: int = 3000) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Источник 2: Wikipedia RU — "Знаете ли вы"
+# Источник 2: aphorism.ru
 # ---------------------------------------------------------------------------
-
-WIKI_API_RU = "https://ru.wikipedia.org/w/api.php"
-
-
-def parse_did_you_know_wikitext(wikitext: str) -> list:
-    facts = []
-    for line in wikitext.split("\n"):
-        m = re.match(r"^\*\s+(.+)$", line)
-        if not m:
-            continue
-        raw = m.group(1)
-        raw = re.sub(r"\[\[(?:Файл|File|Image|Изображение):[^\]]*\]\]", "", raw, flags=re.IGNORECASE)
-        raw = re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]+)\]\]", r"\1", raw)
-        raw = re.sub(r"'{2,3}", "", raw)
-        raw = re.sub(r"\{\{[^}]*\}\}", "", raw)
-        raw = re.sub(r"<ref[^>]*/?>.*?</ref>", "", raw, flags=re.DOTALL)
-        raw = re.sub(r"<ref[^>]*/?>", "", raw)
-        raw = re.sub(r"<[^>]+>", "", raw)
-        raw = clean_text(raw)
-        raw = ensure_punct(raw)
-        if is_valid(raw):
-            facts.append(raw)
-    return facts
-
-
-def fetch_did_you_know_current() -> list:
-    data = http_get_json(WIKI_API_RU, {
-        "action": "parse", "page": "Шаблон:Знаете_ли_вы",
-        "prop": "wikitext", "format": "json",
-    })
-    if "error" in data or "parse" not in data:
-        return []
-    return parse_did_you_know_wikitext(data["parse"]["wikitext"]["*"])
-
-
-def fetch_did_you_know_month(year: int, month: int) -> list:
-    page = f"Проект:Знаете_ли_вы/Архив_рубрики/{year}-{month:02d}"
-    data = http_get_json(WIKI_API_RU, {
-        "action": "parse", "page": page,
-        "prop": "wikitext", "format": "json",
-    })
-    if "error" in data or "parse" not in data:
-        return []
-    return parse_did_you_know_wikitext(data["parse"]["wikitext"]["*"])
-
-
-def fetch_wikipedia_did_you_know(target: int = 2000) -> list:
-    log.info("=== Wikipedia RU 'Знаете ли вы' ===")
-    all_facts = []
-
-    current_facts = fetch_did_you_know_current()
-    all_facts.extend(current_facts)
-    log.info(f"  Текущий шаблон: {len(current_facts)} фактов")
-    time.sleep(0.5)
-
-    now = datetime.date.today()
-    year, month = now.year, now.month
-    while len(all_facts) < target:
-        month -= 1
-        if month == 0:
-            month = 12
-            year -= 1
-        if year < 2008:
-            break
-        facts = fetch_did_you_know_month(year, month)
-        all_facts.extend(facts)
-        log.info(f"  Архив {year}-{month:02d}: {len(facts)} фактов (всего: {len(all_facts)})")
-        time.sleep(0.5)
-
-    seen = set()
-    unique = []
-    for f in all_facts:
-        if f not in seen:
-            seen.add(f)
-            unique.append(f)
-
-    result = [(text, None) for text in unique[:target]]
-    log.info(f"Wikipedia ЗЛВ: итого {len(result)} фактов")
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Источник 3: aphorism.ru
+# Стратегия: /today/ + архив по дням /archive/YYYY/M/D/
+# Кодировка: Windows-1251
+# Селекторы: a[href*="/comments/"] — текст, a[href*="/author/"] — автор
 # ---------------------------------------------------------------------------
 
 APHORISM_RU_BASE = "https://aphorism.ru"
-APHORISM_CATEGORIES = [
-    "/aphorism/", "/proverb/", "/quote/", "/humor/",
-    "/aphorism/love/", "/aphorism/life/", "/aphorism/wisdom/",
-    "/aphorism/friendship/", "/aphorism/happiness/", "/aphorism/work/",
-    "/aphorism/time/", "/aphorism/money/", "/aphorism/mind/",
-    "/aphorism/woman/", "/aphorism/man/", "/aphorism/book/",
-]
 
 
 def fetch_aphorism_page(url: str) -> list:
@@ -323,21 +235,31 @@ def fetch_aphorism_page(url: str) -> list:
     if not data:
         return []
     try:
-        soup = BeautifulSoup(data.decode("utf-8", errors="replace"), "html.parser")
+        html = data.decode("cp1251", errors="replace")
+        soup = BeautifulSoup(html, "html.parser")
         results = []
-        for block in soup.select("div.aphorism-text, .quote-text, .aph-text, [class*='aphorism']"):
-            text = clean_text(block.get_text(strip=True))
+        seen_texts = set()
+        for a_quote in soup.select('a[href*="/comments/"]'):
+            text = clean_text(a_quote.get_text(strip=True))
             text = ensure_punct(text)
-            if not is_valid(text):
+            if not is_valid(text) or text in seen_texts:
                 continue
+            seen_texts.add(text)
             author = None
-            parent = block.parent
-            if parent:
-                author_el = parent.select_one("[class*='author'], [class*='name']")
-                if author_el:
-                    author = clean_text(author_el.get_text(strip=True))
-                    if len(author) > 60 or not author:
-                        author = None
+            # автор — ближайший <a href*="/author/"> рядом
+            author_el = a_quote.find_next_sibling("a")
+            if author_el and "/author/" in author_el.get("href", ""):
+                a_text = clean_text(author_el.get_text(strip=True))
+                if a_text and len(a_text) <= 60:
+                    author = a_text
+            if author is None:
+                parent = a_quote.parent
+                if parent:
+                    author_el = parent.find("a", href=lambda h: h and "/author/" in h)
+                    if author_el:
+                        a_text = clean_text(author_el.get_text(strip=True))
+                        if a_text and len(a_text) <= 60:
+                            author = a_text
             results.append((text, author))
         return results
     except Exception as e:
@@ -345,37 +267,48 @@ def fetch_aphorism_page(url: str) -> list:
         return []
 
 
-def fetch_aphorism_ru(max_pages: int = 50) -> list:
+def fetch_aphorism_ru(max_quotes: int = 3000) -> list:
+    import datetime as dt
     log.info("=== aphorism.ru ===")
-    all_quotes = []
-    for cat in APHORISM_CATEGORIES:
-        for page in range(1, max_pages + 1):
-            url = f"{APHORISM_RU_BASE}{cat}?page={page}" if page > 1 else f"{APHORISM_RU_BASE}{cat}"
-            quotes = fetch_aphorism_page(url)
-            if not quotes:
-                break
+    all_quotes: list = []
+
+    # сначала /today/
+    quotes = fetch_aphorism_page(f"{APHORISM_RU_BASE}/today/")
+    if quotes:
+        all_quotes.extend(quotes)
+        log.info(f"  /today/: {len(quotes)} цитат (всего: {len(all_quotes)})")
+    time.sleep(0.5)
+
+    # потом архив: идём назад по дням
+    today = dt.date.today()
+    day = today - dt.timedelta(days=1)
+    while len(all_quotes) < max_quotes:
+        url = f"{APHORISM_RU_BASE}/archive/{day.year}/{day.month}/{day.day}/"
+        quotes = fetch_aphorism_page(url)
+        if quotes:
             all_quotes.extend(quotes)
             log.info(f"  {url}: {len(quotes)} цитат (всего: {len(all_quotes)})")
-            time.sleep(0.5)
-            if len(all_quotes) >= 3000:
-                break
-        if len(all_quotes) >= 3000:
+        else:
+            log.info(f"  {url}: нет цитат, пропускаем")
+        day -= dt.timedelta(days=1)
+        # не уходим глубже 2 лет
+        if (today - day).days > 730:
             break
+        time.sleep(0.4)
+
     log.info(f"aphorism.ru: итого {len(all_quotes)} цитат")
     return all_quotes
 
 
 # ---------------------------------------------------------------------------
-# Источник 4: citaty.info
+# Источник 3: citaty.info
+# ---------------------------------------------------------------------------
+# Стратегия: листинг /man?page=N (0-indexed)
+# Кодировка: UTF-8
+# Селекторы: a[href*="/quote/"] — текст, a[title="Автор цитаты"] — автор
 # ---------------------------------------------------------------------------
 
 CITATY_BASE = "https://citaty.info"
-CITATY_SECTIONS = [
-    "/citaty/", "/aforizmy/", "/poslovicy/", "/vyskazyvaniya/",
-    "/citaty/o-zhizni/", "/citaty/o-lyubvi/", "/citaty/o-schaste/",
-    "/citaty/o-vremeni/", "/citaty/o-druge/", "/citaty/o-mudrosti/",
-    "/citaty/o-sile/", "/citaty/o-trude/", "/citaty/o-knigah/",
-]
 
 
 def fetch_citaty_page(url: str) -> list:
@@ -385,20 +318,19 @@ def fetch_citaty_page(url: str) -> list:
     try:
         soup = BeautifulSoup(data.decode("utf-8", errors="replace"), "html.parser")
         results = []
-        for block in soup.select(".quote, .quote-body, [class*='quote'], article"):
-            text_el = block.select_one("p, .text, [class*='text'], [class*='body']")
-            if not text_el:
-                text_el = block
-            text = clean_text(text_el.get_text(strip=True))
+        seen_texts = set()
+        for a_quote in soup.select('a[href*="/quote/"]'):
+            text = clean_text(a_quote.get_text(strip=True))
             text = ensure_punct(text)
-            if not is_valid(text):
+            if not is_valid(text) or text in seen_texts:
                 continue
+            seen_texts.add(text)
             author = None
-            author_el = block.select_one("[class*='author'], [class*='name'], cite, footer")
+            author_el = a_quote.find_next_sibling("a", title="Автор цитаты")
             if author_el:
-                author = clean_text(author_el.get_text(strip=True))
-                if len(author) > 60 or not author:
-                    author = None
+                a_text = clean_text(author_el.get_text(strip=True))
+                if a_text and len(a_text) <= 60:
+                    author = a_text
             results.append((text, author))
         return results
     except Exception as e:
@@ -406,28 +338,26 @@ def fetch_citaty_page(url: str) -> list:
         return []
 
 
-def fetch_citaty_info(max_pages: int = 30) -> list:
+def fetch_citaty_info(max_pages: int = 150) -> list:
     log.info("=== citaty.info ===")
-    all_quotes = []
-    for section in CITATY_SECTIONS:
-        for page in range(1, max_pages + 1):
-            url = f"{CITATY_BASE}{section}?page={page}" if page > 1 else f"{CITATY_BASE}{section}"
-            quotes = fetch_citaty_page(url)
-            if not quotes:
-                break
-            all_quotes.extend(quotes)
-            log.info(f"  {url}: {len(quotes)} цитат (всего: {len(all_quotes)})")
-            time.sleep(0.5)
-            if len(all_quotes) >= 2000:
-                break
-        if len(all_quotes) >= 2000:
+    all_quotes: list = []
+    for page in range(max_pages):
+        url = f"{CITATY_BASE}/man" + (f"?page={page}" if page > 0 else "")
+        quotes = fetch_citaty_page(url)
+        if not quotes:
+            log.info(f"  {url}: нет цитат, останавливаемся")
+            break
+        all_quotes.extend(quotes)
+        log.info(f"  {url}: {len(quotes)} цитат (всего: {len(all_quotes)})")
+        time.sleep(0.5)
+        if len(all_quotes) >= 3000:
             break
     log.info(f"citaty.info: итого {len(all_quotes)} цитат")
     return all_quotes
 
 
 # ---------------------------------------------------------------------------
-# Источник 5: Встроенная база
+# Источник 4: Встроенная база
 # ---------------------------------------------------------------------------
 
 BUILTIN_QUOTES = [
@@ -501,12 +431,6 @@ def run_fetch():
     batch_target = min(current + BATCH, TARGET)
     log.info(f"Старт fetcher. В базе: {current}, цель этого запуска: {batch_target} (макс: {TARGET}).")
 
-    log.info("Подгружаем свежий шаблон 'Знаете ли вы'...")
-    fresh = fetch_did_you_know_current()
-    if fresh:
-        db_insert([(t, None) for t in fresh])
-        log.info(f"Свежий ЗЛВ: получено {len(fresh)} фактов (новые добавлены, дубли пропущены)")
-
     current = db_count()
     if current >= batch_target:
         log.info(f"База содержит {current} записей, цель {batch_target} достигнута.")
@@ -524,13 +448,6 @@ def run_fetch():
             db_insert(wiki_quotes)
             current = db_count()
             log.info(f"После WikiQuote: {current} записей")
-
-    if current < batch_target:
-        zlv = fetch_wikipedia_did_you_know(target=min(5000, batch_target - current + 500))
-        if zlv:
-            db_insert(zlv)
-            current = db_count()
-            log.info(f"После Wikipedia ЗЛВ: {current} записей")
 
     if current < batch_target:
         aph = fetch_aphorism_ru()
