@@ -72,8 +72,8 @@ Once TARGET is reached, the DB is considered complete — new restarts just load
 
 1. **BUILTIN_QUOTES** — ~100 hardcoded classics, idempotent
 2. **WikiQuote RU** (`ru.wikiquote.org/w/api.php`) — quotes by author pages from `WIKIAUTHORS` list
-3. **aphorism.ru** — scraping, may be slow or blocked
-4. **citaty.info** — scraping, may be slow or blocked
+3. **aphorism.ru** — `/today/` + `/archive/YYYY/M/D/` (up to 2 years back); encoding cp1251; selectors: `a[href*="/comments/"]` for text, `a[href*="/author/"]` for author
+4. **citaty.info** — `/man?page=N` listing (0-indexed, up to 150 pages); encoding UTF-8; selectors: `a[href*="/quote/"]` for text, `a[title="Автор цитаты"]` for author
 
 ## Parsing quirks
 
@@ -88,6 +88,10 @@ Once TARGET is reached, the DB is considered complete — new restarts just load
 - strips space before punctuation (artifact of removed `{{шаблон}}` in wikitext)
 
 WikiQuote parser skips lines containing `[http` before any processing — those are "Ссылки" section entries, not quotes.
+
+aphorism.ru uses Windows-1251 encoding — always decode with `cp1251`, not `utf-8`.
+
+citaty.info changed its URL structure: old paths `/citaty/`, `/aforizmy/` etc. return 404. Use `/man?page=N`.
 
 ## User-Agent
 
@@ -105,6 +109,8 @@ quotes(id INTEGER PK, text TEXT NOT NULL, author TEXT)
 ```
 
 No migrations. Schema created via `CREATE TABLE IF NOT EXISTS` on every startup.
+
+`get_random_quote` uses `ORDER BY RANDOM() LIMIT 1` — uniform distribution over all rows. The previous `WHERE id >= random % MAX(id)` approach over-sampled quotes with large id gaps before them.
 
 ## Known gotchas
 
