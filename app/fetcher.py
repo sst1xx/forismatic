@@ -110,6 +110,7 @@ def clean_text(s: str) -> str:
     if not s:
         return ""
     s = s.strip()
+    s = s.replace('\xa0', ' ')  # &nbsp; → обычный пробел (иначе ESP32 отображает как «Р»)
     s = re.sub(r"\s*[\u2014\u2013\u2012]\s*", " - ", s)
     s = re.sub(r" {2,}", " ", s)
     s = re.sub(r" +([.!?,;:])", r"\1", s)
