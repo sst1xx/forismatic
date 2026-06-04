@@ -12,12 +12,15 @@ from .fetcher import TARGET
 
 log = logging.getLogger(__name__)
 
+_fetcher_proc: subprocess.Popen | None = None
+
 
 async def _start_fetcher():
     """Запускаем fetcher с небольшой задержкой после старта сервера."""
+    global _fetcher_proc
     await asyncio.sleep(2)
     log.info("Запускаем fetcher как фоновый процесс...")
-    subprocess.Popen(
+    _fetcher_proc = subprocess.Popen(
         [sys.executable, "-m", "app.fetcher"],
         start_new_session=True,
         close_fds=True,
@@ -34,6 +37,19 @@ async def lifespan(app: FastAPI):
     # того как uvicorn полностью запустился и lifespan завершён.
     asyncio.create_task(_start_fetcher())
     yield
+
+    if _fetcher_proc is not None:
+        if _fetcher_proc.poll() is None:
+            log.info("Завершаем fetcher...")
+            _fetcher_proc.terminate()
+            try:
+                _fetcher_proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                log.warning("Fetcher не завершился за 10с, убиваем...")
+                _fetcher_proc.kill()
+                _fetcher_proc.wait()
+        else:
+            _fetcher_proc.wait()  # reap already-exited zombie
 
 
 app = FastAPI(
