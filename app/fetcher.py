@@ -23,10 +23,13 @@ MAX_RESPONSE_BYTES = 5_000_000
 TARGET = 20_000
 BATCH = 3_000
 
+MAX_DISPLAY_CHARS = 160  # термопринтер 54 мм, полная строка «текст + автор»
+MAX_TEXT_CHARS = 130
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
-UA = "forismatic-bot/1.0 (https://github.com/forismatic; educational project)"
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 
 
 # ---------------------------------------------------------------------------
@@ -126,8 +129,15 @@ def ensure_punct(text: str) -> str:
     return text
 
 
+def fits_printer(text: str, author: Optional[str] = None) -> bool:
+    display = text.strip()
+    if author:
+        display = f"{display} {author.strip()}"
+    return len(display) <= MAX_DISPLAY_CHARS
+
+
 def is_valid(text: str) -> bool:
-    if len(text) < 20 or len(text) > 500:
+    if len(text) < 20 or len(text) > MAX_TEXT_CHARS:
         return False
     if not re.search(r"[а-яёА-ЯЁ]", text):
         return False
@@ -201,7 +211,7 @@ def fetch_wikiquote_author(author: str) -> list:
         raw = re.sub(r"'+", "", raw)
         raw = clean_text(raw)
         raw = ensure_punct(raw)
-        if is_valid(raw):
+        if is_valid(raw) and fits_printer(raw, author):
             results.append((raw, author))
     return results
 
@@ -245,7 +255,6 @@ def fetch_aphorism_page(url: str) -> list:
             text = ensure_punct(text)
             if not is_valid(text) or text in seen_texts:
                 continue
-            seen_texts.add(text)
             author = None
             # автор — ближайший <a href*="/author/"> рядом
             author_el = a_quote.find_next_sibling("a")
@@ -261,6 +270,9 @@ def fetch_aphorism_page(url: str) -> list:
                         a_text = clean_text(author_el.get_text(strip=True))
                         if a_text and len(a_text) <= 60:
                             author = a_text
+            if not fits_printer(text, author):
+                continue
+            seen_texts.add(text)
             results.append((text, author))
         return results
     except Exception as e:
@@ -325,13 +337,15 @@ def fetch_citaty_page(url: str) -> list:
             text = ensure_punct(text)
             if not is_valid(text) or text in seen_texts:
                 continue
-            seen_texts.add(text)
             author = None
             author_el = a_quote.find_next_sibling("a", title="Автор цитаты")
             if author_el:
                 a_text = clean_text(author_el.get_text(strip=True))
                 if a_text and len(a_text) <= 60:
                     author = a_text
+            if not fits_printer(text, author):
+                continue
+            seen_texts.add(text)
             results.append((text, author))
         return results
     except Exception as e:
@@ -439,7 +453,10 @@ def run_fetch():
 
     log.info(f"Досгружаем до {batch_target}. Сейчас в базе: {current}")
 
-    db_insert(BUILTIN_QUOTES)
+    db_insert([
+        (t, a) for t, a in BUILTIN_QUOTES
+        if is_valid(t) and fits_printer(t, a)
+    ])
     current = db_count()
     log.info(f"После встроенной базы: {current} записей")
 

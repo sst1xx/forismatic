@@ -78,7 +78,7 @@ Once TARGET is reached, the DB is considered complete — new restarts just load
 ## Parsing quirks
 
 `is_valid()` rejects:
-- text shorter than 20 chars or longer than 500
+- text shorter than 20 chars or longer than 130
 - no Cyrillic characters
 - starts with `:`, `категория:`, `см.`, `wikiquote`
 - fewer than 4 words (catches section headers like "Критика и публицистика")
@@ -95,11 +95,13 @@ citaty.info changed its URL structure: old paths `/citaty/`, `/aforizmy/` etc. r
 
 ## User-Agent
 
-All HTTP clients use:
+All HTTP clients use Chrome on Windows 11:
+
 ```
-forismatic-bot/1.0 (https://github.com/forismatic; educational project)
+Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36
 ```
-Wikipedia returns `403` with a browser UA — do not change this.
+
+If WikiQuote starts returning `403`, revert to the bot UA (`forismatic-bot/1.0`).
 
 ## Schema
 
